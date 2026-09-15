@@ -56,6 +56,8 @@ public:
     // files were actually opened.
     size_t partCount() const { return parts_.size(); }
 
+    uint64_t partSize(size_t index) const { return parts_[index].size; }
+
     // Reads exactly `length` bytes starting at `offset` in the logical
     // (concatenated) stream, transparently spanning across part
     // boundaries as needed. Throws std::runtime_error if that range is

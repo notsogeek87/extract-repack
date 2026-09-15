@@ -38,8 +38,50 @@ struct CandidateDiagnostics {
     uint64_t descrSize = 0;
     uint32_t expectedCrc = 0;
     uint32_t actualCrc = 0;
-    std::string headHex;
+    std::string tailHex;
 };
+
+// Reads the little-endian uint32 at buf[offset..offset+4).
+uint32_t readLe32(const std::vector<uint8_t>& buf, size_t offset) {
+    return static_cast<uint32_t>(buf[offset]) | (static_cast<uint32_t>(buf[offset + 1]) << 8) |
+        (static_cast<uint32_t>(buf[offset + 2]) << 16) | (static_cast<uint32_t>(buf[offset + 3]) << 24);
+}
+
+// Length of the descriptor body (signature included, trailing CRC excluded),
+// found by locating the split where the body's own CRC-32 matches the 4 bytes
+// immediately after it.
+//
+// The reference (MEMORY_BUFFER::openWithCRCAtEnd) hardcodes this split at
+// `window - 4`, which holds because the footer descriptor is normally the very
+// last thing in the archive. That is tried first here, so a well-formed
+// archive takes the exact reference path. Real repack .bin sets were observed
+// to carry a few bytes past the descriptor, though, which makes the fixed
+// split overshoot and CRC-fail a perfectly good descriptor; scanning for the
+// split recovers those. A CRC-32 agreeing by chance is a 1-in-2^32 event, so
+// this cannot silently accept a wrong split.
+std::optional<size_t> findCrcValidatedBodyLength(const std::vector<uint8_t>& buf) {
+    // 9 = signature(4) + at least one byte per remaining field, before the CRC.
+    constexpr size_t kMinBodyLen = 9;
+    if (buf.size() < kMinBodyLen + 4) {
+        return std::nullopt;
+    }
+    const size_t maxBodyLen = buf.size() - 4;
+
+    if (crc32(buf.data(), maxBodyLen) == readLe32(buf, maxBodyLen)) {
+        return maxBodyLen; // the reference split — the overwhelmingly common case
+    }
+
+    // Otherwise walk the remaining splits, carrying the CRC forward one byte at
+    // a time rather than recomputing it for every candidate length.
+    uint32_t running = crc32(buf.data(), kMinBodyLen);
+    for (size_t bodyLen = kMinBodyLen; bodyLen < maxBodyLen; ++bodyLen) {
+        if (running == readLe32(buf, bodyLen)) {
+            return bodyLen;
+        }
+        running = crc32(buf.data() + bodyLen, 1, running);
+    }
+    return std::nullopt;
+}
 
 // Parses a footer local descriptor at `descrPos`, mirroring
 // LOCAL_BLOCK_DESCRIPTOR + MEMORY_BUFFER::openWithCRCAtEnd from the real
@@ -50,34 +92,34 @@ struct CandidateDiagnostics {
 //   right_crc  = last 4 bytes of that window
 //   crc        = CalcCRC(window, descr_size - 4)      // CRC-32, zlib-compatible
 //
-// i.e. the descriptor's body runs from its signature all the way to 4 bytes
-// before the end of the window, and is *not* delimited by parsing its fields.
-// Returns std::nullopt when the CRC doesn't validate — a coincidental byte
-// match rather than the real descriptor. Once the CRC has validated, any
-// further inconsistency is real corruption and is thrown, matching the
-// reference's CHECK() calls.
+// i.e. the descriptor's body runs from its signature to 4 bytes before the end
+// of the window, and is not delimited by parsing its fields. That split is
+// tried first; see findCrcValidatedBodyLength for why a shorter one is also
+// considered. Returns std::nullopt when no split CRC-validates — a
+// coincidental byte match rather than the real descriptor. Once the CRC has
+// validated, any further inconsistency is real corruption and is thrown,
+// matching the reference's CHECK() calls.
 std::optional<BlockDescriptor> tryParseFooterLocalDescriptor(
     const std::vector<uint8_t>& buf, uint64_t descrPos, CandidateDiagnostics* diagnostics) {
     if (buf.size() < 8) {
         return std::nullopt; // no room for a signature plus the trailing CRC
     }
-    const size_t bodyLen = buf.size() - 4;
-    const uint32_t expectedCrc = static_cast<uint32_t>(buf[bodyLen]) | (static_cast<uint32_t>(buf[bodyLen + 1]) << 8) |
-        (static_cast<uint32_t>(buf[bodyLen + 2]) << 16) | (static_cast<uint32_t>(buf[bodyLen + 3]) << 24);
-    const uint32_t actualCrc = crc32(buf.data(), bodyLen);
+    const std::optional<size_t> validated = findCrcValidatedBodyLength(buf);
 
     if (diagnostics != nullptr && !diagnostics->attempted) {
+        const size_t referenceBodyLen = buf.size() - 4;
         diagnostics->attempted = true;
         diagnostics->descrPos = descrPos;
         diagnostics->descrSize = buf.size();
-        diagnostics->expectedCrc = expectedCrc;
-        diagnostics->actualCrc = actualCrc;
-        diagnostics->headHex = toHex(buf, 16);
+        diagnostics->expectedCrc = readLe32(buf, referenceBodyLen);
+        diagnostics->actualCrc = crc32(buf.data(), referenceBodyLen);
+        diagnostics->tailHex = toHex(buf, 64);
     }
 
-    if (actualCrc != expectedCrc) {
+    if (!validated) {
         return std::nullopt;
     }
+    const size_t bodyLen = *validated;
 
     ByteReader reader(buf.data(), bodyLen);
     reader.skip(4); // signature, already matched by the caller
@@ -140,13 +182,17 @@ BlockDescriptor ArcReader::findAndReadFooterLocalDescriptor() {
     // Everything below is a failure path. Report what was actually seen: this
     // is the only step that cannot be reproduced without the user's own files,
     // so a bare "corrupted" costs a full test round-trip on a real device.
-    std::string where = " [size=" + std::to_string(fileSize) + " parts=" + std::to_string(file_.partCount()) +
+    std::string partSizes;
+    for (size_t i = 0; i < file_.partCount(); ++i) {
+        partSizes += (i == 0 ? "" : "+") + std::to_string(file_.partSize(i));
+    }
+    std::string where = " [size=" + std::to_string(fileSize) + " parts=" + partSizes +
         " candidates=" + std::to_string(candidates);
     if (diagnostics.attempted) {
         char crcBuf[64];
         std::snprintf(crcBuf, sizeof(crcBuf), " crc=%08x want=%08x", diagnostics.actualCrc, diagnostics.expectedCrc);
         where += " pos=" + std::to_string(diagnostics.descrPos) + " len=" + std::to_string(diagnostics.descrSize) +
-            std::string(crcBuf) + " head=" + diagnostics.headHex;
+            std::string(crcBuf) + " bytes=" + diagnostics.tailHex;
     }
     where += "]";
 

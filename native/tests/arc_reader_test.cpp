@@ -122,23 +122,33 @@ void testCorruptionIsDetected() {
     expectTrue(threw, "a flipped byte inside the directory block is caught by the CRC check (ArcFormatError)");
 }
 
+void testReadsDescriptorFollowedByTrailingBytes() {
+    // Observed on a real 20 GB repack: the footer descriptor is not the very
+    // last thing in the file, so the reference's fixed "body = window - 4"
+    // split overshoots and CRC-fails a perfectly valid descriptor. The reader
+    // locates the split by CRC instead and recovers.
+    ArcReader reader(fixturePath("sample_trailing_bytes.arc"));
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "an archive with bytes after its footer descriptor still lists its 2 files");
+}
+
 void testReportsDiagnosticsOnFooterFailure() {
-    // A failure here is the one step that cannot be reproduced off-device
-    // (it needs the user's own multi-gigabyte .bin files), so the message
-    // must carry enough to diagnose it from a single screenshot.
+    // A footer failure can only happen against files that cannot be
+    // reproduced off-device, so the message must carry enough to diagnose it
+    // from a single screenshot.
     bool threw = false;
     std::string message;
     try {
-        ArcReader reader(fixturePath("sample_trailing_bytes.arc"));
+        ArcReader reader(fixturePath("not_an_arc_but_has_signature.bin"));
         reader.list();
     } catch (const ArcFormatError& e) {
         threw = true;
         message = e.what();
     }
-    expectTrue(threw, "a file with bytes appended after the footer descriptor is rejected");
+    expectTrue(threw, "a file whose only ArC signature is coincidental is rejected");
     expectTrue(message.find("size=") != std::string::npos && message.find("parts=") != std::string::npos &&
-                   message.find("crc=") != std::string::npos && message.find("head=") != std::string::npos,
-               "the failure message carries size/parts/crc/head diagnostics");
+                   message.find("crc=") != std::string::npos && message.find("bytes=") != std::string::npos,
+               "the failure message carries size/parts/crc/bytes diagnostics");
 }
 
 void testListsAndExtractsAcrossMultiPartBoundary() {
@@ -193,6 +203,7 @@ int main() {
     testExtractsStoredFileContent();
     testUnsupportedCodecIsReportedHonestly();
     testCorruptionIsDetected();
+    testReadsDescriptorFollowedByTrailingBytes();
     testReportsDiagnosticsOnFooterFailure();
     testListsAndExtractsAcrossMultiPartBoundary();
     testRejectsNonArchiveFile();

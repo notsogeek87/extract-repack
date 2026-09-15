@@ -164,14 +164,18 @@ def main():
     with open(os.path.join(HERE, "sample_corrupt.arc"), "wb") as f:
         f.write(assemble(files, corrupt_directory_byte=True))
 
-    # The footer local descriptor must be the very last thing in the file:
-    # its CRC covers everything from its signature to 4 bytes before EOF
-    # (MEMORY_BUFFER::openWithCRCAtEnd in the vendored Unarc source). Bytes
-    # appended after it therefore make the archive unreadable — for the real
-    # unarc too, not just for us. Used to check that such a failure reports
-    # actionable diagnostics rather than a bare "corrupted".
+    # Observed on a real 20 GB repack: the footer descriptor is followed by a
+    # few more bytes rather than ending exactly at EOF, which makes the
+    # reference's fixed "body = window - 4" split (openWithCRCAtEnd in the
+    # vendored Unarc source) overshoot and CRC-fail a valid descriptor. The
+    # reader locates the split by CRC instead, so this must still list.
     with open(os.path.join(HERE, "sample_trailing_bytes.arc"), "wb") as f:
-        f.write(assemble(files) + SIGNATURE + b"\xde\xad\xbe\xef" * 5)
+        f.write(assemble(files) + b"\xde\xad\xbe\xef" * 5)
+
+    # Only a coincidental "ArC\x01" near EOF and nothing that CRC-validates:
+    # must be rejected, with diagnostics, rather than misparsed.
+    with open(os.path.join(HERE, "not_an_arc_but_has_signature.bin"), "wb") as f:
+        f.write(b"\x11" * 200 + SIGNATURE + b"\x22" * 40)
 
     # Inno Setup style multi-part external data: the single logical archive
     # (same bytes as sample_store.arc) split across three sibling files at
