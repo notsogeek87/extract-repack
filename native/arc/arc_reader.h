@@ -40,6 +40,16 @@ private:
 // codec backend actual extraction would need — this class reports that
 // via UnsupportedCompressorError rather than silently returning an empty
 // listing.
+// A control block decompressed cleanly but its contents do not match the CRC
+// recorded for it. Distinct from ArcFormatError so the listing can tell this
+// apart from a structural failure and decide what to do about it, rather than
+// every caller having to treat "checksum disagrees" and "this is not an
+// archive" as the same thing.
+class BlockCrcMismatchError : public ArcFormatError {
+public:
+    explicit BlockCrcMismatchError(const std::string& message) : ArcFormatError(message) {}
+};
+
 class ArcReader {
 public:
     explicit ArcReader(const std::string& path);
@@ -57,7 +67,13 @@ private:
     std::vector<uint8_t> decompressBlock(const BlockDescriptor& block);
     void readDirectoryBlockInto(const BlockDescriptor& dirBlockDescriptor, std::vector<ArcEntry>& out);
 
+    std::vector<ArcEntry> listWithCurrentCrcPolicy();
+
     FileSource file_;
+    // Set only by list(), and only after a strict attempt has already failed
+    // on a checksum. See list() for why that fallback exists and what still
+    // guards the result.
+    bool ignoreBlockCrc_ = false;
 };
 
 // Lists a repack's sibling `.bin` files without assuming how they relate to

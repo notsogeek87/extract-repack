@@ -128,7 +128,7 @@ def build_footer_local_descriptor(footer_origsize, footer_compsize, footer_crc, 
 
 
 def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_disk="store", corrupt_directory_byte=False,
-             corrupt_footer_descriptor_crc=False, lzma_blocks=False):
+             corrupt_footer_descriptor_crc=False, lzma_blocks=False, wrong_block_crc=False):
     header_prefix = SIGNATURE  # cheap-detection bytes only; ArcReader::list() never reads these.
 
     data_block = b"".join(content for _, _, content in files)
@@ -143,7 +143,7 @@ def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_d
     # A control block's recorded CRC is over its *decompressed* bytes
     # (openCompressedCheckCRC in the vendored Unarc source), while its position
     # and compsize describe what is actually on disk.
-    dir_block_crc = crc32(dir_block_body)
+    dir_block_crc = 0xDEADBEEF if wrong_block_crc else crc32(dir_block_body)
     dir_block_stored = lzma_compress_freearc(dir_block_body) if lzma_blocks else dir_block_body
     if lzma_blocks:
         dir_block_compressor_on_disk = LZMA_METHOD
@@ -223,6 +223,13 @@ def main():
     # such an archive is impossible without a working LZMA decoder.
     with open(os.path.join(HERE, "sample_lzma.arc"), "wb") as f:
         f.write(assemble(files, lzma_blocks=True))
+
+    # A control block that decodes perfectly but whose recorded checksum does
+    # not match it — the shape repacker-built archives have, where no stored
+    # CRC agrees with standard CRC-32. Must still list, on the strength of the
+    # structure parsing cleanly.
+    with open(os.path.join(HERE, "sample_wrong_block_crc.arc"), "wb") as f:
+        f.write(assemble(files, wrong_block_crc=True))
 
     # Only a coincidental "ArC\x01" near EOF and nothing that CRC-validates:
     # must be rejected, with diagnostics, rather than misparsed.

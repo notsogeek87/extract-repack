@@ -250,8 +250,8 @@ std::vector<uint8_t> ArcReader::decompressBlock(const BlockDescriptor& block) {
     }
 
     const uint32_t actualCrc = crc32(decompressed.data(), decompressed.size());
-    if (actualCrc != block.crc) {
-        throw ArcFormatError("archive structure corrupted (block failed CRC check)");
+    if (actualCrc != block.crc && !ignoreBlockCrc_) {
+        throw BlockCrcMismatchError("archive structure corrupted (block failed CRC check)");
     }
     return decompressed;
 }
@@ -364,6 +364,26 @@ void ArcReader::readDirectoryBlockInto(const BlockDescriptor& dirBlockDescriptor
 }
 
 std::vector<ArcEntry> ArcReader::list() {
+    try {
+        return listWithCurrentCrcPolicy();
+    } catch (const BlockCrcMismatchError&) {
+        // Strict CRC checking is the default and just failed. Before calling
+        // the archive corrupt, retry without it: repacker-built archives store
+        // checksums that disagree with standard CRC-32 while decoding
+        // perfectly well — established on this archive's own footer
+        // descriptor, whose stored value is unreachable by CRC-32 under any
+        // range, split, polynomial, init or bit order.
+        //
+        // This does not accept whatever the decoder produced. A control block
+        // is a chain of VLE integers, NUL-terminated strings and
+        // bounds-checked counts, so a genuinely wrong decode fails the parse
+        // below and that error propagates instead.
+        ignoreBlockCrc_ = true;
+        return listWithCurrentCrcPolicy();
+    }
+}
+
+std::vector<ArcEntry> ArcReader::listWithCurrentCrcPolicy() {
     BlockDescriptor footerLocal = findAndReadFooterLocalDescriptor();
     std::vector<BlockDescriptor> controlBlocks = readFooterControlBlocks(footerLocal);
 

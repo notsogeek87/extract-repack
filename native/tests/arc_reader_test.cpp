@@ -176,6 +176,16 @@ void testParsesLzmaMethodString() {
                "explicit lc/lp/pb/dictionary parameters override the defaults");
 }
 
+void testListsBlockWhoseRecordedCrcDisagrees() {
+    // Repacker-built archives record checksums that disagree with standard
+    // CRC-32 while decoding perfectly well. Strict checking is still tried
+    // first; this asserts the fallback reads such an archive rather than
+    // calling it corrupt.
+    ArcReader reader(fixturePath("sample_wrong_block_crc.arc"));
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "a block whose recorded CRC disagrees still lists its files");
+}
+
 void testReportsDiagnosticsOnFooterFailure() {
     // A footer failure can only happen against files that cannot be
     // reproduced off-device, so the message must carry enough to diagnose it
@@ -287,6 +297,7 @@ int main() {
     testCorruptionIsDetected();
     testReadsDescriptorFollowedByTrailingBytes();
     testReadsDescriptorWhoseCrcDoesNotValidate();
+    testListsBlockWhoseRecordedCrcDisagrees();
     testParsesLzmaMethodString();
     testListsArchiveWithLzmaControlBlocks();
     testReportsDiagnosticsOnFooterFailure();
