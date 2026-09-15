@@ -44,6 +44,22 @@ android {
         }
     }
 
+    // Versioned so every build (CI included) signs with the same debug key: a
+    // CI runner has no ~/.android/debug.keystore of its own, so without this
+    // AGP generates a random one per build, and two successive debug APKs
+    // then can't install over each other (Android refuses the signature
+    // mismatch, forcing an uninstall between every test build). Passwords are
+    // deliberately public — they're Android's own standard debug keystore
+    // defaults, not a secret; release builds don't use this config.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
