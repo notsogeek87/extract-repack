@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Compose (see ui/theme/Theme.kt) owns all real theming; this XML
+        theme only needs to exist so the manifest/launch has something
+        non-crashing to point at before the first Compose frame draws
+        (splash background), and to opt out of the legacy ActionBar.
+    -->
+    <style name="Theme.ArcExtract" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/arcextract_background</item>
+    </style>
+</resources>

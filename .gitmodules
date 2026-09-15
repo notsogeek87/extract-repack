@@ -1,0 +1,6 @@
+[submodule "native/third_party/innoextract"]
+	path = native/third_party/innoextract
+	url = https://github.com/dscharrer/innoextract.git
+[submodule "native/third_party/freearc"]
+	path = native/third_party/freearc
+	url = https://github.com/j2969719/freearc-old.git

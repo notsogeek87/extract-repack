@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple stylized "open box" glyph — deliberately not a trademark or a copy of any archiver's logo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,40 L54,26 L84,40 L84,78 L54,92 L24,78 Z" />
+    <path
+        android:fillColor="#A5D6A7"
+        android:pathData="M24,40 L54,54 L84,40 L54,26 Z" />
+    <path
+        android:fillColor="#1B5E20"
+        android:pathData="M54,54 L54,92 L24,78 L24,40 Z" />
+    <path
+        android:fillColor="#2E7D32"
+        android:pathData="M54,54 L54,92 L84,78 L84,40 Z" />
+</vector>
