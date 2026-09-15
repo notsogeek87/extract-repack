@@ -122,14 +122,23 @@ void testCorruptionIsDetected() {
     expectTrue(threw, "a flipped byte inside the directory block is caught by the CRC check (ArcFormatError)");
 }
 
-void testSkipsCoincidentalSignatureNearerEof() {
-    // Real-world regression: a footer-signature-shaped byte sequence can sit
-    // closer to EOF than the real footer without being one (see
-    // docs/ANALYSIS.md §1). The reader must keep scanning backward past a
-    // CRC-failing candidate instead of reporting the whole archive corrupt.
-    ArcReader reader(fixturePath("sample_decoy_signature.arc"));
-    std::vector<ArcEntry> entries = reader.list();
-    expectTrue(entries.size() == 2, "sample_decoy_signature.arc still lists exactly 2 files past the decoy");
+void testReportsDiagnosticsOnFooterFailure() {
+    // A failure here is the one step that cannot be reproduced off-device
+    // (it needs the user's own multi-gigabyte .bin files), so the message
+    // must carry enough to diagnose it from a single screenshot.
+    bool threw = false;
+    std::string message;
+    try {
+        ArcReader reader(fixturePath("sample_trailing_bytes.arc"));
+        reader.list();
+    } catch (const ArcFormatError& e) {
+        threw = true;
+        message = e.what();
+    }
+    expectTrue(threw, "a file with bytes appended after the footer descriptor is rejected");
+    expectTrue(message.find("size=") != std::string::npos && message.find("parts=") != std::string::npos &&
+                   message.find("crc=") != std::string::npos && message.find("head=") != std::string::npos,
+               "the failure message carries size/parts/crc/head diagnostics");
 }
 
 void testListsAndExtractsAcrossMultiPartBoundary() {
@@ -184,7 +193,7 @@ int main() {
     testExtractsStoredFileContent();
     testUnsupportedCodecIsReportedHonestly();
     testCorruptionIsDetected();
-    testSkipsCoincidentalSignatureNearerEof();
+    testReportsDiagnosticsOnFooterFailure();
     testListsAndExtractsAcrossMultiPartBoundary();
     testRejectsNonArchiveFile();
 

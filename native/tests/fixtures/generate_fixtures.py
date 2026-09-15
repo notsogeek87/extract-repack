@@ -164,15 +164,14 @@ def main():
     with open(os.path.join(HERE, "sample_corrupt.arc"), "wb") as f:
         f.write(assemble(files, corrupt_directory_byte=True))
 
-    # A real footer signature can recur by coincidence in trailing bytes
-    # that are not actually a footer descriptor (see docs/ANALYSIS.md §1:
-    # the original FindFooterDescriptor does not assume the match nearest
-    # EOF is the right one, and relies on the CRC check to reject it and
-    # keep scanning backward). Simulate that by appending a second,
-    # deliberately bogus "ArC\x01" occurrence after the real archive.
-    with open(os.path.join(HERE, "sample_decoy_signature.arc"), "wb") as f:
-        decoy = SIGNATURE + b"\xde\xad\xbe\xef" * 5
-        f.write(assemble(files) + decoy)
+    # The footer local descriptor must be the very last thing in the file:
+    # its CRC covers everything from its signature to 4 bytes before EOF
+    # (MEMORY_BUFFER::openWithCRCAtEnd in the vendored Unarc source). Bytes
+    # appended after it therefore make the archive unreadable — for the real
+    # unarc too, not just for us. Used to check that such a failure reports
+    # actionable diagnostics rather than a bare "corrupted".
+    with open(os.path.join(HERE, "sample_trailing_bytes.arc"), "wb") as f:
+        f.write(assemble(files) + SIGNATURE + b"\xde\xad\xbe\xef" * 5)
 
     # Inno Setup style multi-part external data: the single logical archive
     # (same bytes as sample_store.arc) split across three sibling files at

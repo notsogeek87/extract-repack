@@ -51,6 +51,11 @@ public:
 
     uint64_t size() const { return totalSize_; }
 
+    // How many physical parts back this logical stream — surfaced in error
+    // messages so a failure on a device says whether all the sibling .bin
+    // files were actually opened.
+    size_t partCount() const { return parts_.size(); }
+
     // Reads exactly `length` bytes starting at `offset` in the logical
     // (concatenated) stream, transparently spanning across part
     // boundaries as needed. Throws std::runtime_error if that range is
