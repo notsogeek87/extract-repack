@@ -122,6 +122,16 @@ void testCorruptionIsDetected() {
     expectTrue(threw, "a flipped byte inside the directory block is caught by the CRC check (ArcFormatError)");
 }
 
+void testSkipsCoincidentalSignatureNearerEof() {
+    // Real-world regression: a footer-signature-shaped byte sequence can sit
+    // closer to EOF than the real footer without being one (see
+    // docs/ANALYSIS.md §1). The reader must keep scanning backward past a
+    // CRC-failing candidate instead of reporting the whole archive corrupt.
+    ArcReader reader(fixturePath("sample_decoy_signature.arc"));
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "sample_decoy_signature.arc still lists exactly 2 files past the decoy");
+}
+
 void testRejectsNonArchiveFile() {
     // Not a FreeArc archive at all: no signature anywhere near EOF.
     bool threw = false;
@@ -145,6 +155,7 @@ int main() {
     testExtractsStoredFileContent();
     testUnsupportedCodecIsReportedHonestly();
     testCorruptionIsDetected();
+    testSkipsCoincidentalSignatureNearerEof();
     testRejectsNonArchiveFile();
 
     if (failures > 0) {

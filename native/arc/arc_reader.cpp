@@ -14,6 +14,63 @@ bool matchesSignatureAt(const std::vector<uint8_t>& buf, size_t i) {
            buf[i + 2] == kSignature[2] && buf[i + 3] == kSignature[3];
 }
 
+// Tries to parse a footer local descriptor out of `buf`, which starts at the
+// candidate's signature bytes and extends up to `kMaxFooterDescriptorSize`
+// bytes or EOF, whichever is smaller — a generous bound, not an assumption
+// that the descriptor ends exactly at EOF (a RECOVERY block or other bytes
+// may follow it; see docs/ANALYSIS.md §1/§3.1). The descriptor's own length
+// is instead determined by parsing its self-delimiting fields forward from
+// the signature. Returns std::nullopt for a candidate that is structurally
+// malformed or whose CRC doesn't validate — i.e. a coincidental byte match,
+// not the real footer descriptor. Once the CRC *has* validated, any further
+// inconsistency (wrong block type, implausible sizes) is real corruption and
+// is thrown rather than swallowed.
+std::optional<BlockDescriptor> tryParseFooterLocalDescriptor(const std::vector<uint8_t>& buf, uint64_t descrPos) {
+    size_t bodyLen;
+    uint64_t type;
+    std::string compressor;
+    uint64_t origSize;
+    uint64_t compSize;
+    uint32_t crc;
+    try {
+        ByteReader fieldReader(buf.data() + 4, buf.size() - 4);
+        type = fieldReader.readVleInt();
+        compressor = fieldReader.readString();
+        origSize = fieldReader.readVleInt();
+        compSize = fieldReader.readVleInt();
+        crc = fieldReader.readFixed4();
+        bodyLen = 4 + fieldReader.position();
+        if (bodyLen + 4 > buf.size()) {
+            return std::nullopt; // no room left for the trailing CRC field
+        }
+    } catch (const ArcFormatError&) {
+        return std::nullopt;
+    }
+
+    const uint32_t trailingCrc = static_cast<uint32_t>(buf[bodyLen]) | (static_cast<uint32_t>(buf[bodyLen + 1]) << 8) |
+        (static_cast<uint32_t>(buf[bodyLen + 2]) << 16) | (static_cast<uint32_t>(buf[bodyLen + 3]) << 24);
+    const uint32_t actualCrc = crc32(buf.data(), bodyLen);
+    if (actualCrc != trailingCrc) {
+        return std::nullopt;
+    }
+
+    if (static_cast<BlockType>(type) != BlockType::Footer) {
+        throw ArcFormatError("archive structure corrupted (footer block not found)");
+    }
+    if (origSize == 0 || compSize == 0 || compSize > descrPos) {
+        throw ArcFormatError("archive structure corrupted (implausible footer descriptor sizes)");
+    }
+
+    BlockDescriptor descriptor;
+    descriptor.type = BlockType::Footer;
+    descriptor.compressor = std::move(compressor);
+    descriptor.origSize = origSize;
+    descriptor.compSize = compSize;
+    descriptor.crc = crc;
+    descriptor.pos = descrPos - compSize;
+    return descriptor;
+}
+
 } // namespace
 
 ArcReader::ArcReader(const std::string& path) : file_(path) {}
@@ -29,62 +86,30 @@ BlockDescriptor ArcReader::findAndReadFooterLocalDescriptor() {
     std::vector<uint8_t> window = file_.readAt(windowStart, windowSize);
 
     // Scan backward from the end, exactly like the original
-    // FindFooterDescriptor: the occurrence closest to EOF is taken, without
-    // assuming it is the only one in the window (see docs/ANALYSIS.md §1
-    // on why a byte-coincidental match elsewhere is expected and handled
-    // by the CRC check below, not by uniqueness).
-    bool found = false;
-    size_t matchIndex = 0;
+    // FindFooterDescriptor: a byte-coincidental match can occur anywhere in
+    // the window (see docs/ANALYSIS.md §1), so a candidate is only accepted
+    // once it parses cleanly and its CRC validates — never by merely being
+    // the occurrence closest to EOF. On a failed candidate, keep walking
+    // toward the start of the window instead of giving up immediately.
+    bool foundSignature = false;
     for (size_t i = windowSize - 4; ; --i) {
         if (matchesSignatureAt(window, i)) {
-            matchIndex = i;
-            found = true;
-            break;
+            foundSignature = true;
+            const uint64_t descrPos = windowStart + i;
+            const uint64_t readSize = std::min<uint64_t>(fileSize - descrPos, kMaxFooterDescriptorSize);
+            std::vector<uint8_t> buf = file_.readAt(descrPos, readSize);
+            if (std::optional<BlockDescriptor> descriptor = tryParseFooterLocalDescriptor(buf, descrPos)) {
+                return *descriptor;
+            }
+            // Not the real footer descriptor (malformed fields or CRC mismatch) —
+            // fall through and keep scanning backward for another candidate.
         }
         if (i == 0) break;
     }
-    if (!found) {
+    if (!foundSignature) {
         throw ArcFormatError("this is not a FreeArc archive, or it is corrupt (no footer signature found)");
     }
-
-    const uint64_t descrPos = windowStart + matchIndex;
-    const uint64_t descrWindowSize = fileSize - descrPos; // always <= kMaxFooterDescriptorSize by construction
-    if (descrWindowSize < 4) {
-        throw ArcFormatError("archive structure corrupted (truncated footer descriptor)");
-    }
-    std::vector<uint8_t> descrWindow = file_.readAt(descrPos, descrWindowSize);
-
-    const size_t bodyLen = descrWindow.size() - 4;
-    const uint32_t trailingCrc =
-        static_cast<uint32_t>(descrWindow[bodyLen]) | (static_cast<uint32_t>(descrWindow[bodyLen + 1]) << 8) |
-        (static_cast<uint32_t>(descrWindow[bodyLen + 2]) << 16) | (static_cast<uint32_t>(descrWindow[bodyLen + 3]) << 24);
-    const uint32_t actualCrc = crc32(descrWindow.data(), bodyLen);
-    if (actualCrc != trailingCrc) {
-        throw ArcFormatError("archive structure corrupted (footer descriptor failed CRC check)");
-    }
-
-    ByteReader reader(descrWindow.data(), bodyLen);
-    const uint32_t sign = reader.readFixed4();
-    if (sign != (static_cast<uint32_t>(kSignature[0]) | (static_cast<uint32_t>(kSignature[1]) << 8) |
-                 (static_cast<uint32_t>(kSignature[2]) << 16) | (static_cast<uint32_t>(kSignature[3]) << 24))) {
-        throw ArcFormatError("archive structure corrupted (bad footer descriptor signature)");
-    }
-
-    BlockDescriptor descriptor;
-    descriptor.type = static_cast<BlockType>(reader.readVleInt());
-    descriptor.compressor = reader.readString();
-    descriptor.origSize = reader.readVleInt();
-    descriptor.compSize = reader.readVleInt();
-    descriptor.crc = reader.readFixed4();
-
-    if (descriptor.type != BlockType::Footer) {
-        throw ArcFormatError("archive structure corrupted (footer block not found)");
-    }
-    if (descriptor.origSize == 0 || descriptor.compSize == 0 || descriptor.compSize > descrPos) {
-        throw ArcFormatError("archive structure corrupted (implausible footer descriptor sizes)");
-    }
-    descriptor.pos = descrPos - descriptor.compSize;
-    return descriptor;
+    throw ArcFormatError("archive structure corrupted (footer descriptor failed CRC check)");
 }
 
 std::vector<uint8_t> ArcReader::decompressBlock(const BlockDescriptor& block) {

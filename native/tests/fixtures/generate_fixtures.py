@@ -164,6 +164,16 @@ def main():
     with open(os.path.join(HERE, "sample_corrupt.arc"), "wb") as f:
         f.write(assemble(files, corrupt_directory_byte=True))
 
+    # A real footer signature can recur by coincidence in trailing bytes
+    # that are not actually a footer descriptor (see docs/ANALYSIS.md §1:
+    # the original FindFooterDescriptor does not assume the match nearest
+    # EOF is the right one, and relies on the CRC check to reject it and
+    # keep scanning backward). Simulate that by appending a second,
+    # deliberately bogus "ArC\x01" occurrence after the real archive.
+    with open(os.path.join(HERE, "sample_decoy_signature.arc"), "wb") as f:
+        decoy = SIGNATURE + b"\xde\xad\xbe\xef" * 5
+        f.write(assemble(files) + decoy)
+
     with open(os.path.join(HERE, "not_an_archive.bin"), "wb") as f:
         f.write(b"This is just a plain text file, not an ArC archive at all.\n" * 3)
 
