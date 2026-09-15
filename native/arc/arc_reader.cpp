@@ -116,25 +116,51 @@ std::optional<BlockDescriptor> tryParseFooterLocalDescriptor(
         diagnostics->tailHex = toHex(buf, 64);
     }
 
-    if (!validated) {
-        return std::nullopt;
-    }
-    const size_t bodyLen = *validated;
-
-    ByteReader reader(buf.data(), bodyLen);
-    reader.skip(4); // signature, already matched by the caller
+    // Parse the fields forward from the signature. They are self-delimiting,
+    // so this works whether or not the CRC agreed.
     BlockDescriptor descriptor;
-    descriptor.type = static_cast<BlockType>(reader.readVleInt());
-    descriptor.compressor = reader.readString();
-    descriptor.origSize = reader.readVleInt();
-    descriptor.compSize = reader.readVleInt();
-    descriptor.crc = reader.readFixed4();
-
-    if (descriptor.type != BlockType::Footer) {
-        throw ArcFormatError("archive structure corrupted (footer block not found)");
+    size_t parsedBodyLen;
+    try {
+        ByteReader reader(buf.data(), validated ? *validated : buf.size());
+        reader.skip(4); // signature, already matched by the caller
+        descriptor.type = static_cast<BlockType>(reader.readVleInt());
+        descriptor.compressor = reader.readString();
+        descriptor.origSize = reader.readVleInt();
+        descriptor.compSize = reader.readVleInt();
+        descriptor.crc = reader.readFixed4();
+        parsedBodyLen = reader.position(); // skip(4) above already counted the signature
+    } catch (const ArcFormatError&) {
+        return std::nullopt; // not a descriptor at all
     }
-    if (descriptor.origSize == 0 || descriptor.compSize == 0 || descriptor.compSize > descrPos) {
-        throw ArcFormatError("archive structure corrupted (strange descriptor)");
+
+    // Structural checks, same as the reference's CHECK() calls.
+    const bool structurallyValid = descriptor.type == BlockType::Footer && descriptor.origSize > 0 &&
+        descriptor.compSize > 0 && descriptor.compSize <= descrPos && !descriptor.compressor.empty() &&
+        std::all_of(descriptor.compressor.begin(), descriptor.compressor.end(),
+                    [](unsigned char c) { return c >= 0x20 && c < 0x7F; });
+
+    if (validated) {
+        if (descriptor.type != BlockType::Footer) {
+            throw ArcFormatError("archive structure corrupted (footer block not found)");
+        }
+        if (!structurallyValid) {
+            throw ArcFormatError("archive structure corrupted (strange descriptor)");
+        }
+        descriptor.pos = descrPos - descriptor.compSize;
+        return descriptor;
+    }
+
+    // No split CRC-validated. Repacker-built archives exist whose descriptor
+    // checksum matches no standard CRC-32 over its own bytes (verified against
+    // real .bin files: same fields, same layout, stored value unreachable by
+    // CRC-32/32C/BZIP2/POSIX/MPEG-2/Adler-32 over every range and split), so a
+    // descriptor whose fields are all individually sound is accepted on their
+    // strength alone rather than declaring a readable archive corrupt. The
+    // checks above are what makes that safe, and nothing downstream is
+    // weakened: every control block still has to decompress and pass its own
+    // CRC before any entry is reported.
+    if (!structurallyValid || parsedBodyLen + 4 > buf.size()) {
+        return std::nullopt;
     }
     descriptor.pos = descrPos - descriptor.compSize;
     return descriptor;

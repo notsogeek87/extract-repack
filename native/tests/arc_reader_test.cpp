@@ -132,6 +132,17 @@ void testReadsDescriptorFollowedByTrailingBytes() {
     expectTrue(entries.size() == 2, "an archive with bytes after its footer descriptor still lists its 2 files");
 }
 
+void testReadsDescriptorWhoseCrcDoesNotValidate() {
+    // Real repacker-built .bin files (verified against a 20 GB repack) carry a
+    // footer descriptor whose fields are all sound — signature, type FOOTER,
+    // a printable compressor string, plausible sizes — but whose trailing
+    // checksum matches no standard CRC-32 over its own bytes. Reading it must
+    // not hinge on that checksum.
+    ArcReader reader(fixturePath("sample_bad_descriptor_crc.arc"));
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "an archive whose descriptor CRC does not validate still lists its files");
+}
+
 void testReportsDiagnosticsOnFooterFailure() {
     // A footer failure can only happen against files that cannot be
     // reproduced off-device, so the message must carry enough to diagnose it
@@ -242,6 +253,7 @@ int main() {
     testUnsupportedCodecIsReportedHonestly();
     testCorruptionIsDetected();
     testReadsDescriptorFollowedByTrailingBytes();
+    testReadsDescriptorWhoseCrcDoesNotValidate();
     testReportsDiagnosticsOnFooterFailure();
     testListsAndExtractsAcrossMultiPartBoundary();
     testListsSideBySideIndependentArchives();

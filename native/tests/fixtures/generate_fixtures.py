@@ -114,7 +114,8 @@ def build_footer_local_descriptor(footer_origsize, footer_compsize, footer_crc, 
     return descriptor + trailing_crc
 
 
-def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_disk="store", corrupt_directory_byte=False):
+def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_disk="store", corrupt_directory_byte=False,
+             corrupt_footer_descriptor_crc=False):
     header_prefix = SIGNATURE  # cheap-detection bytes only; ArcReader::list() never reads these.
 
     data_block = b"".join(content for _, _, content in files)
@@ -145,6 +146,10 @@ def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_d
         footer_crc=footer_crc,
         compressor=footer_compressor_on_disk,
     )
+    if corrupt_footer_descriptor_crc:
+        # Fields stay valid, only the trailing CRC is wrong — the shape seen on
+        # real repacker-built .bin files.
+        descriptor = descriptor[:-4] + fixed4(0xDEADBEEF)
 
     return header_prefix + data_block + dir_block_body + footer_body + descriptor
 
@@ -183,6 +188,13 @@ def main():
         f.write(assemble(files))
     with open(os.path.join(HERE, "sample_independent-02.bin"), "wb") as f:
         f.write(assemble(other))
+
+    # Real repacker-built .bin files carry a footer descriptor whose fields are
+    # all sound but whose trailing checksum matches no standard CRC-32 over its
+    # own bytes. Such an archive must still be readable on the strength of its
+    # fields rather than reported as corrupt.
+    with open(os.path.join(HERE, "sample_bad_descriptor_crc.arc"), "wb") as f:
+        f.write(assemble(files, corrupt_footer_descriptor_crc=True))
 
     # Only a coincidental "ArC\x01" near EOF and nothing that CRC-validates:
     # must be rejected, with diagnostics, rather than misparsed.
