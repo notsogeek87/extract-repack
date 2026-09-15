@@ -82,7 +82,8 @@ class FreeArcBackend : ArchiveBackend {
             written += chunk.size
         }
 
-        val crcVerified = entry.crc32 == null || (crc.value and 0xFFFFFFFFL) == (entry.crc32 and 0xFFFFFFFFL)
+        val expectedCrc32 = entry.crc32
+        val crcVerified = expectedCrc32 == null || (crc.value and 0xFFFFFFFFL) == (expectedCrc32 and 0xFFFFFFFFL)
         if (!crcVerified) {
             throw UnsupportedEntryException("Archive corrompue : CRC invalide pour ${entry.path}")
         }
