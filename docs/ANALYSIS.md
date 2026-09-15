@@ -235,12 +235,51 @@ elle n'a pas de chemin de code réel et testé :**
 | Détection conteneur ARC (`ArC\x01`) | ✅ implémenté + testé (JVM + C++) | `core` tests + harnais `native/tools/arc_probe` |
 | Parsing structure ARC (HEADER/DIRECTORY/FOOTER, listing sans décompression) | ✅ implémenté en C++, vérifié en autonome (g++ desktop) contre les octets réels fournis par l'utilisateur et contre un fichier synthétique | `native/arc/*`, `native/tools/arc_probe` |
 | Sécurité (path traversal, tailles, sélection récursive) | ✅ implémenté + testé (JVM) | `core` tests unitaires |
-| Extraction LZMA/LZMA2 | 🧩 architecture posée (`FreeArcBackend`), sous-module vendorisé, **décompression réelle non câblée dans cette session** (nécessite un environnement Android NDK pour itérer/valider — absent de ce bac à sable) | `native/CMakeLists.txt`, `docs/BUILDING.md` §"Prochaines étapes" |
-| Extraction PPMd/REP | 🧩 même statut que LZMA2 | idem |
+| Décodage LZMA des blocs de contrôle (FOOTER/DIRECTORY) | ✅ implémenté + testé, et vérifié sur un vrai repack de 20 Go | `native/arc/lzma_decoder.*`, fixture `sample_lzma.arc` |
+| Extraction LZMA des blocs de **données** | 🧩 le décodeur existe (ci-dessus) mais `FreeArcBackend.extract` lit encore les octets bruts : il manque le décodage séquentiel d'un solid block | `app/.../FreeArcBackend.kt`, `docs/BUILDING.md` §4.1 |
+| Extraction PPMd/REP | 🧩 sous-module vendorisé, non câblé | `docs/BUILDING.md` §4.1 |
 | Extraction SREP | ❌ non supporté, détecté et signalé explicitement | `SrepBackend` (stub) |
 | Extraction XTool (Reflate/Precomp) | ❌ non supporté, détecté et signalé explicitement | `XToolBackend` (stub) |
 | Extraction Inno Setup (via innoextract) | 🧩 sous-module vendorisé + JNI prévu, **build NDK non exécuté ici** (pas de SDK/NDK Android disponible dans ce bac à sable) | `native/third_party/innoextract`, `docs/BUILDING.md` |
 | UI Compose complète | ✅ écrite selon la spec (écrans, arbre, progression) | `app/` — non compilable ici faute de SDK Android, voir §6 |
+
+### 5bis. Ce qu'un vrai repack a appris (vérifié sur l'appareil)
+
+Un repack réel de 20 Go (3 fichiers `.bin`) a été ouvert avec l'app. Quatre
+constats, tous contredisant une hypothèse de ce document :
+
+1. **Les `.bin` ne sont pas les volumes d'une seule archive.** Leurs tailles
+   (20,18 Go + 150 Mo + 16 Mo) excluent un découpage `-v` (volumes égaux) :
+   ce sont trois archives autonomes côte à côte, la disposition qu'itère le
+   script Inno Setup livré avec FreeArc (`Archives = '{src}\*.arc'`). Lire
+   leur concaténation ne échoue pas bruyamment — elle ne liste que la
+   dernière. `listArchiveParts()` teste donc les deux lectures et garde celle
+   qui voit le plus de données.
+2. **Aucun CRC stocké ne correspond au CRC-32 standard.** Le descripteur de
+   FOOTER se décode parfaitement (signature, type FOOTER, `lzma:mfbt4:d1m`,
+   tailles cohérentes, 30 octets pile) mais sa valeur stockée est inatteignable
+   par CRC-32/32C/BZIP2/POSIX/MPEG-2/Adler-32, sur toutes les plages, tous les
+   découpages, tous les init/xor. Idem pour les blocs de contrôle. Ces fichiers
+   ne sont pas écrits par le FreeArc d'origine mais par le `unarc` patché des
+   repackers. D'où : vérification stricte d'abord, repli sur la validité
+   structurelle ensuite (voir `BlockCrcMismatchError`).
+3. **Les blocs de contrôle sont compressés en LZMA**, donc *lister* une telle
+   archive exige déjà un décodeur — ce n'est pas une option réservée à
+   l'extraction.
+4. **Le blocage réel est la chaîne de codecs des données** : le repack testé
+   annonce `srep:m3yf+magic2`. Or `magic` **n'est pas un codec FreeArc** (les
+   méthodes enregistrées sont LZMA, PPMD, REP, GRZIP, LZP, LZ4, Tornado,
+   DELTA, MM, TTA, DISPACK, 4x4, BCJ, storing, encryption) et `srep` n'en est
+   pas un non plus (c'est un outil autonome, `Compression/SREP/`). Ces codecs
+   viennent de la chaîne propriétaire du repacker : **le FreeArc d'origine ne
+   saurait pas non plus extraire cette archive.** Sans implémentation ni
+   spécification de `magic2`, l'extraction est hors d'atteinte — ce n'est pas
+   une question d'effort de portage, l'information manque.
+
+Conséquence pour le périmètre : l'app sait désormais *ouvrir et lister* de
+vrais repacks, et peut extraire les entrées `store`. Extraire celles des
+repacks modernes suppose de porter une chaîne de codecs tierce dont une partie
+n'est pas publique.
 
 **Pourquoi la décompression réelle n'est pas câblée end-to-end ici** : ce
 bac à sable ne dispose ni du SDK Android ni du NDK (vérifié —
