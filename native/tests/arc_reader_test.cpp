@@ -180,6 +180,44 @@ void testListsAndExtractsAcrossMultiPartBoundary() {
                "extracted content matches exactly when read across part boundaries");
 }
 
+void testListsSideBySideIndependentArchives() {
+    // A repack's .bin files are not always volumes of one archive: the part
+    // sizes seen on a real 20 GB repack (20.18 GB + 150 MB + 16 MB) are the
+    // side-by-side layout instead. Each part must be read as its own archive,
+    // with positions rebased onto the concatenated stream.
+    std::vector<std::string> parts = {
+        fixturePath("sample_independent-01.bin"),
+        fixturePath("sample_independent-02.bin"),
+    };
+    std::vector<ArcEntry> entries = listArchiveParts(parts);
+    expectTrue(entries.size() == 3, "both independent archives are listed together (2 + 1 entries)");
+
+    const ArcEntry* extra = nullptr;
+    for (const auto& e : entries) {
+        if (e.path == "bonus/extra.txt") extra = &e;
+    }
+    expectTrue(extra != nullptr, "an entry from the second archive is present");
+    if (!extra) return;
+
+    // Rebased onto the concatenated stream, so one fd set serves extraction.
+    FileSource whole(parts);
+    std::vector<uint8_t> content = whole.readAt(extra->dataBlockAbsolutePos, extra->uncompressedSize);
+    std::string text(content.begin(), content.end());
+    expectTrue(text == "A second, independent archive.\n",
+               "the second archive's content reads back at its rebased position");
+}
+
+void testMultiPartStillPrefersTheConcatenation() {
+    // The split-volume layout must keep working: listArchiveParts tries the
+    // concatenation first, so this resolves there rather than per part.
+    std::vector<std::string> parts = {
+        fixturePath("sample_multipart-01.bin"),
+        fixturePath("sample_multipart-02.bin"),
+        fixturePath("sample_multipart-03.bin"),
+    };
+    expectTrue(listArchiveParts(parts).size() == 2, "a split-volume set still lists via the concatenation");
+}
+
 void testRejectsNonArchiveFile() {
     // Not a FreeArc archive at all: no signature anywhere near EOF.
     bool threw = false;
@@ -206,6 +244,8 @@ int main() {
     testReadsDescriptorFollowedByTrailingBytes();
     testReportsDiagnosticsOnFooterFailure();
     testListsAndExtractsAcrossMultiPartBoundary();
+    testListsSideBySideIndependentArchives();
+    testMultiPartStillPrefersTheConcatenation();
     testRejectsNonArchiveFile();
 
     if (failures > 0) {

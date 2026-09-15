@@ -342,4 +342,73 @@ std::vector<ArcEntry> ArcReader::list() {
     return entries;
 }
 
+namespace {
+
+template <typename Part>
+std::vector<ArcEntry> listPartsImpl(const std::vector<Part>& parts) {
+    if (parts.empty()) {
+        throw ArcFormatError("no archive parts given");
+    }
+
+    if (parts.size() == 1) {
+        return ArcReader(parts).list();
+    }
+
+    // Layout 1: one archive split across volumes — only the concatenation has
+    // a footer at its end.
+    std::vector<ArcEntry> asWhole;
+    std::string wholeFailure;
+    try {
+        asWhole = ArcReader(parts).list();
+    } catch (const UnsupportedCompressorError&) {
+        throw; // a real codec limit, not a wrong guess about the layout
+    } catch (const std::runtime_error& e) {
+        // ArcFormatError, or an out-of-range read from following a position
+        // that only makes sense under the other layout.
+        wholeFailure = e.what();
+    }
+
+    // Layout 2: each part is a self-contained archive. Positions are rebased
+    // onto the concatenated stream so extraction stays uniform.
+    std::vector<ArcEntry> asParts;
+    std::string partFailures;
+    uint64_t base = 0;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const uint64_t partSize = FileSource(parts[i]).size();
+        try {
+            for (ArcEntry entry : ArcReader(parts[i]).list()) {
+                entry.dataBlockAbsolutePos += base;
+                asParts.push_back(std::move(entry));
+            }
+        } catch (const UnsupportedCompressorError&) {
+            throw;
+        } catch (const std::runtime_error& e) {
+            partFailures += " part" + std::to_string(i + 1) + "=" + e.what();
+        }
+        base += partSize;
+    }
+
+    // Both interpretations can "work" while one of them is wrong: reading a
+    // set of side-by-side archives as one concatenation finds only the last
+    // one's footer and silently lists just that archive. Whichever sees more
+    // of the data is the one that matched the real layout.
+    if (asParts.size() > asWhole.size()) {
+        return asParts;
+    }
+    if (!asWhole.empty()) {
+        return asWhole;
+    }
+    throw ArcFormatError(wholeFailure + partFailures);
+}
+
+} // namespace
+
+std::vector<ArcEntry> listArchiveParts(const std::vector<std::string>& paths) {
+    return listPartsImpl(paths);
+}
+
+std::vector<ArcEntry> listArchiveParts(const std::vector<int>& fds) {
+    return listPartsImpl(fds);
+}
+
 } // namespace arcextract

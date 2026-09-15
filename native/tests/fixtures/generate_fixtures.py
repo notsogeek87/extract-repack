@@ -172,6 +172,18 @@ def main():
     with open(os.path.join(HERE, "sample_trailing_bytes.arc"), "wb") as f:
         f.write(assemble(files) + b"\xde\xad\xbe\xef" * 5)
 
+    # Several self-contained archives sitting side by side, the layout the
+    # FreeArc-shipped Inno Setup script iterates over ("Extracts all found
+    # archives"). Neither file is a volume of the other, so only reading each
+    # one separately lists everything.
+    other = [
+        ("bonus", "extra.txt", b"A second, independent archive.\n"),
+    ]
+    with open(os.path.join(HERE, "sample_independent-01.bin"), "wb") as f:
+        f.write(assemble(files))
+    with open(os.path.join(HERE, "sample_independent-02.bin"), "wb") as f:
+        f.write(assemble(other))
+
     # Only a coincidental "ArC\x01" near EOF and nothing that CRC-validates:
     # must be rejected, with diagnostics, rather than misparsed.
     with open(os.path.join(HERE, "not_an_arc_but_has_signature.bin"), "wb") as f:

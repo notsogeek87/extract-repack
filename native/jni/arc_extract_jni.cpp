@@ -79,8 +79,7 @@ extern "C" JNIEXPORT jobjectArray JNICALL
 Java_eu_lielu_arcextract_jni_ArcNative_listArc(JNIEnv* env, jobject /*thiz*/, jintArray fds) {
     std::vector<ArcEntry> entries;
     try {
-        ArcReader reader(toIntVector(env, fds));
-        entries = reader.list();
+        entries = listArchiveParts(toIntVector(env, fds));
     } catch (const UnsupportedCompressorError& e) {
         throwUnsupportedCompressor(env, e.compressorId());
         return nullptr;

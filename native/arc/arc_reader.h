@@ -60,4 +60,23 @@ private:
     FileSource file_;
 };
 
+// Lists a repack's sibling `.bin` files without assuming how they relate to
+// each other, because both layouts occur in the wild:
+//
+//  - one archive split across volumes ("-v" in FreeArc is documented as
+//    "split archive to volumes each of SIZE bytes"), where only the
+//    concatenation has a footer, and
+//  - several self-contained archives sitting side by side, which is what the
+//    official Inno Setup integration shipped with FreeArc iterates over
+//    (`Archives = '{src}\*.arc'`, "Extracts all found archives" — see
+//    native/third_party/freearc/Unarc/InnoSetup/FreeArc_Example.iss).
+//
+// Tries the concatenation first, then falls back to reading each part as its
+// own archive, merging whatever parses. Entry positions are always reported
+// relative to the concatenated stream, so extraction reads the same ordered
+// fd set either way. Throws only if no interpretation yields an archive, with
+// the per-part diagnostics gathered along the way.
+std::vector<ArcEntry> listArchiveParts(const std::vector<std::string>& paths);
+std::vector<ArcEntry> listArchiveParts(const std::vector<int>& fds);
+
 } // namespace arcextract
