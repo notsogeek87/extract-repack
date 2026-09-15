@@ -31,7 +31,7 @@ class ExtractionEngine(private val context: Context) {
     private val backend = FreeArcBackend()
 
     suspend fun extract(
-        installerUri: Uri,
+        binFileUris: List<Uri>,
         selectedEntries: List<ArchiveEntry>,
         destinationTreeUri: Uri,
         onProgress: (ExtractionProgress) -> Unit,
@@ -42,9 +42,11 @@ class ExtractionEngine(private val context: Context) {
         var bytesDone = 0L
         var filesDone = 0
 
-        val descriptor = SafFileAccess.openReadDescriptor(context, installerUri)
+        // The archive's actual bytes live in the ordered .bin part(s), not the
+        // installer .exe — see docs/ANALYSIS.md §1 and eu.lielu.arcextract.jni.ArcNative.
+        val descriptors = SafFileAccess.openReadDescriptors(context, binFileUris)
         try {
-            val fdAsSource = descriptor.fd.toString()
+            val fdAsSource = descriptors.joinToString(",") { it.fd.toString() }
 
             for (entry in selectedEntries) {
                 currentCoroutineContext().ensureActive() // cooperative cancellation point
@@ -91,7 +93,7 @@ class ExtractionEngine(private val context: Context) {
                 )
             }
         } finally {
-            descriptor.close()
+            descriptors.forEach { it.close() }
         }
 
         return ExtractionSummary(

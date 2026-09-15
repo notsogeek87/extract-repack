@@ -132,6 +132,35 @@ void testSkipsCoincidentalSignatureNearerEof() {
     expectTrue(entries.size() == 2, "sample_decoy_signature.arc still lists exactly 2 files past the decoy");
 }
 
+void testListsAndExtractsAcrossMultiPartBoundary() {
+    // Real-world regression: a FitGirl-style repack splits one logical
+    // FreeArc archive across sibling fg-01.bin/fg-02.bin/fg-03.bin files
+    // (see docs/ANALYSIS.md §1) — the footer, and even a solid block's
+    // content, can straddle a part boundary. ArcReader(paths) must treat
+    // the ordered parts as one continuous stream, not just the first part.
+    std::vector<std::string> parts = {
+        fixturePath("sample_multipart-01.bin"),
+        fixturePath("sample_multipart-02.bin"),
+        fixturePath("sample_multipart-03.bin"),
+    };
+    ArcReader reader(parts);
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "multi-part archive still lists exactly 2 files");
+
+    const ArcEntry* helloEntry = nullptr;
+    for (const auto& e : entries) {
+        if (e.path == "data/hello.txt") helloEntry = &e;
+    }
+    expectTrue(helloEntry != nullptr, "located data/hello.txt across the multi-part archive");
+    if (!helloEntry) return;
+
+    FileSource multiPartFile(parts);
+    std::vector<uint8_t> content = multiPartFile.readAt(helloEntry->dataBlockAbsolutePos, helloEntry->uncompressedSize);
+    std::string text(content.begin(), content.end());
+    expectTrue(text == "Hello from inside a FreeArc-style solid block!\n",
+               "extracted content matches exactly when read across part boundaries");
+}
+
 void testRejectsNonArchiveFile() {
     // Not a FreeArc archive at all: no signature anywhere near EOF.
     bool threw = false;
@@ -156,6 +185,7 @@ int main() {
     testUnsupportedCodecIsReportedHonestly();
     testCorruptionIsDetected();
     testSkipsCoincidentalSignatureNearerEof();
+    testListsAndExtractsAcrossMultiPartBoundary();
     testRejectsNonArchiveFile();
 
     if (failures > 0) {

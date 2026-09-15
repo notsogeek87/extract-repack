@@ -174,6 +174,19 @@ def main():
         decoy = SIGNATURE + b"\xde\xad\xbe\xef" * 5
         f.write(assemble(files) + decoy)
 
+    # Inno Setup style multi-part external data: the single logical archive
+    # (same bytes as sample_store.arc) split across three sibling files at
+    # arbitrary byte boundaries, including mid-solid-block and mid-footer —
+    # exactly how fg-01.bin/fg-02.bin/fg-03.bin split a FreeArc container in
+    # a real repack. FileSource(paths) must present these as one stream.
+    whole = assemble(files)
+    cut1 = len(whole) // 3
+    cut2 = (2 * len(whole)) // 3
+    parts = [whole[:cut1], whole[cut1:cut2], whole[cut2:]]
+    for i, part in enumerate(parts, start=1):
+        with open(os.path.join(HERE, f"sample_multipart-{i:02d}.bin"), "wb") as f:
+            f.write(part)
+
     with open(os.path.join(HERE, "not_an_archive.bin"), "wb") as f:
         f.write(b"This is just a plain text file, not an ArC archive at all.\n" * 3)
 

@@ -113,7 +113,7 @@ class ArcExtractViewModel(application: Application) : AndroidViewModel(applicati
 
         extractionJob = viewModelScope.launch {
             runCatching {
-                engine.extract(analysis.installerUri, selectedEntries, destinationTreeUri) { progress ->
+                engine.extract(analysis.binFileUris, selectedEntries, destinationTreeUri) { progress ->
                     _screen.value = Screen.Extracting(progress)
                 }
             }.onSuccess { summary ->
@@ -161,12 +161,22 @@ class ArcExtractViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        val firstBin = children.first { it.name == binNames.first() }
-        val entries = listArcEntries(firstBin.uri)
+        // A repack's FreeArc archive is the *concatenation* of every sibling
+        // .bin part in order (fg-01.bin, fg-02.bin, ...), not just the first
+        // one — Inno Setup itself reads them back the same way. The FOOTER
+        // ArcReader locates from EOF, and even a solid block's content, can
+        // land in any part, so all of them must be opened together (see
+        // docs/ANALYSIS.md §1, native/arc/file_source.h).
+        val binByName = children.associateBy { it.name }
+        val binUris = binNames.map { name ->
+            binByName[name]?.uri ?: error("listed .bin file '$name' vanished from the folder listing")
+        }
+        val entries = listArcEntries(binUris)
         buildTreeScreen(
             installerUri = setupCandidate.uri,
             installerDisplayName = setupCandidate.name ?: "setup.exe",
             binNames = binNames,
+            binUris = binUris,
             entries = entries,
         )
     }
@@ -183,17 +193,24 @@ class ArcExtractViewModel(application: Application) : AndroidViewModel(applicati
         _screen.value = Screen.Failure(UserMessage.BinFilesMissing)
     }
 
-    private suspend fun listArcEntries(uri: Uri): List<ArchiveEntry> {
+    private suspend fun listArcEntries(binUris: List<Uri>): List<ArchiveEntry> {
         val context = getApplication<Application>()
-        val descriptor = SafFileAccess.openReadDescriptor(context, uri)
+        val descriptors = SafFileAccess.openReadDescriptors(context, binUris)
         return try {
-            FreeArcBackend().list(descriptor.fd.toString())
+            val source = descriptors.joinToString(",") { it.fd.toString() }
+            FreeArcBackend().list(source)
         } finally {
-            descriptor.close()
+            descriptors.forEach { it.close() }
         }
     }
 
-    private fun buildTreeScreen(installerUri: Uri, installerDisplayName: String, binNames: List<String>, entries: List<ArchiveEntry>) {
+    private fun buildTreeScreen(
+        installerUri: Uri,
+        installerDisplayName: String,
+        binNames: List<String>,
+        binUris: List<Uri>,
+        entries: List<ArchiveEntry>,
+    ) {
         val validEntries = entries.mapNotNull { entry ->
             val validated = PathSecurity.validate(entry.path)
             if (validated is PathSecurity.ValidationResult.Valid) entry.copy(path = validated.normalizedPath) else null
@@ -213,6 +230,7 @@ class ArcExtractViewModel(application: Application) : AndroidViewModel(applicati
                 installerUri = installerUri,
                 installerDisplayName = installerDisplayName,
                 binFileNames = binNames,
+                binFileUris = binUris,
                 totalDataBytes = totalBytes,
                 root = root,
                 selection = emptySet(),

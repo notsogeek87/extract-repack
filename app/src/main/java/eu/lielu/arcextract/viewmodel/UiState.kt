@@ -18,6 +18,8 @@ data class ArchiveAnalysis(
     val installerUri: Uri,
     val installerDisplayName: String,
     val binFileNames: List<String>,
+    /** Same order as [binFileNames] — the archive's actual data lives here, not behind [installerUri]. */
+    val binFileUris: List<Uri>,
     val totalDataBytes: Long,
     val root: FileTreeNode,
     val selection: Set<String>,

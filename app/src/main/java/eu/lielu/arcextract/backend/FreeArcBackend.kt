@@ -27,12 +27,17 @@ class FreeArcBackend : ArchiveBackend {
     override fun canHandle(source: String, headBytes: ByteArray): Boolean =
         ArcNative.isArcSignature(headBytes)
 
-    /** @param source decimal file-descriptor number, as opened by the caller via SAF — see [ArchiveBackend]. */
+    /**
+     * @param source comma-separated, ordered list of decimal
+     *   file-descriptor numbers, as opened by the caller via SAF — one fd
+     *   for a plain single-file archive, or one per sibling `.bin` part
+     *   for an Inno Setup style multi-part installer (see [ArcNative] and
+     *   [ArchiveBackend]). A bare single fd (no comma) also works.
+     */
     override fun list(source: String): List<ArchiveEntry> {
-        val fd = source.toIntOrNull()
-            ?: throw UnsupportedEntryException("Descripteur de fichier invalide : $source")
+        val fds = parseFds(source)
         val nativeEntries = try {
-            ArcNative.listArc(fd)
+            ArcNative.listArc(fds)
         } catch (e: UnsupportedCompressorException) {
             // Even *listing* needs a codec when a DIRECTORY/FOOTER control
             // block itself is compressed with something other than store.
@@ -64,8 +69,7 @@ class FreeArcBackend : ArchiveBackend {
         if (!entry.isExtractable) {
             throw UnsupportedEntryException(entry.compressionMethod.reason)
         }
-        val fd = source.toIntOrNull()
-            ?: throw UnsupportedEntryException("Descripteur de fichier invalide : $source")
+        val fds = parseFds(source)
         val dataBlockPos = entry.backendData?.toLongOrNull()
             ?: throw UnsupportedEntryException("Position introuvable pour ${entry.path} (archive non relistée ?)")
         val totalSize = entry.uncompressedSize
@@ -76,7 +80,7 @@ class FreeArcBackend : ArchiveBackend {
         while (written < totalSize) {
             val remaining = totalSize - written
             val chunkLength = minOf(remaining, CHUNK_BYTES).toInt()
-            val chunk = ArcNative.readRawChunk(fd, dataBlockPos + written, chunkLength)
+            val chunk = ArcNative.readRawChunk(fds, dataBlockPos + written, chunkLength)
             destination.write(chunk)
             crc.update(chunk)
             written += chunk.size
@@ -88,6 +92,14 @@ class FreeArcBackend : ArchiveBackend {
             throw UnsupportedEntryException("Archive corrompue : CRC invalide pour ${entry.path}")
         }
         return ExtractionOutcome(bytesWritten = written, crcVerified = true)
+    }
+
+    private fun parseFds(source: String): IntArray {
+        val fds = source.split(',').map { it.trim().toIntOrNull() }
+        if (fds.isEmpty() || fds.any { it == null }) {
+            throw UnsupportedEntryException("Descripteur de fichier invalide : $source")
+        }
+        return fds.map { it!! }.toIntArray()
     }
 
     private companion object {

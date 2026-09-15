@@ -40,6 +40,26 @@ object SafFileAccess {
             ?: throw java.io.IOException("Le fournisseur de documents n'a pas pu ouvrir $uri en lecture")
     }
 
+    /**
+     * Opens every [uris] in order (e.g. the ordered `.bin` parts of one
+     * logical multi-part archive — see [eu.lielu.arcextract.jni.ArcNative]).
+     * If any open fails partway through, every descriptor already opened
+     * is closed before the exception propagates, so a caller never leaks
+     * fds on the failure path.
+     */
+    fun openReadDescriptors(context: Context, uris: List<Uri>): List<ParcelFileDescriptor> {
+        val opened = mutableListOf<ParcelFileDescriptor>()
+        try {
+            for (uri in uris) {
+                opened += openReadDescriptor(context, uri)
+            }
+            return opened
+        } catch (e: Throwable) {
+            opened.forEach { it.close() }
+            throw e
+        }
+    }
+
     fun displayName(context: Context, uri: Uri): String {
         return DocumentFile.fromSingleUri(context, uri)?.name ?: uri.lastPathSegment ?: uri.toString()
     }

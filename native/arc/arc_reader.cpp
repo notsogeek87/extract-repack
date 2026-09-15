@@ -74,7 +74,9 @@ std::optional<BlockDescriptor> tryParseFooterLocalDescriptor(const std::vector<u
 } // namespace
 
 ArcReader::ArcReader(const std::string& path) : file_(path) {}
+ArcReader::ArcReader(const std::vector<std::string>& paths) : file_(paths) {}
 ArcReader::ArcReader(int fd) : file_(fd) {}
+ArcReader::ArcReader(const std::vector<int>& fds) : file_(fds) {}
 
 BlockDescriptor ArcReader::findAndReadFooterLocalDescriptor() {
     const uint64_t fileSize = file_.size();

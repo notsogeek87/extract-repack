@@ -55,11 +55,31 @@ void throwIOException(JNIEnv* env, const std::string& message) {
 
 } // namespace
 
+namespace {
+
+// A FitGirl-style repack splits one logical FreeArc archive across
+// several sibling `.bin` files, opened in order and passed down as one
+// fd array per call — see native/arc/file_source.h and
+// docs/ANALYSIS.md §1. Converts the jintArray Kotlin passes into a plain
+// std::vector<int> for FileSource/ArcReader.
+std::vector<int> toIntVector(JNIEnv* env, jintArray fds) {
+    const jsize len = env->GetArrayLength(fds);
+    std::vector<int> result(static_cast<size_t>(len));
+    if (len > 0) {
+        jint* elems = env->GetIntArrayElements(fds, nullptr);
+        for (jsize i = 0; i < len; ++i) result[static_cast<size_t>(i)] = static_cast<int>(elems[i]);
+        env->ReleaseIntArrayElements(fds, elems, JNI_ABORT);
+    }
+    return result;
+}
+
+} // namespace
+
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_eu_lielu_arcextract_jni_ArcNative_listArc(JNIEnv* env, jobject /*thiz*/, jint fd) {
+Java_eu_lielu_arcextract_jni_ArcNative_listArc(JNIEnv* env, jobject /*thiz*/, jintArray fds) {
     std::vector<ArcEntry> entries;
     try {
-        ArcReader reader(static_cast<int>(fd));
+        ArcReader reader(toIntVector(env, fds));
         entries = reader.list();
     } catch (const UnsupportedCompressorError& e) {
         throwUnsupportedCompressor(env, e.compressorId());
@@ -104,9 +124,9 @@ Java_eu_lielu_arcextract_jni_ArcNative_listArc(JNIEnv* env, jobject /*thiz*/, ji
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_eu_lielu_arcextract_jni_ArcNative_readRawChunk(
-    JNIEnv* env, jobject /*thiz*/, jint fd, jlong absolutePos, jint length) {
+    JNIEnv* env, jobject /*thiz*/, jintArray fds, jlong absolutePos, jint length) {
     try {
-        FileSource source(static_cast<int>(fd));
+        FileSource source(toIntVector(env, fds));
         std::vector<uint8_t> buf = source.readAt(static_cast<uint64_t>(absolutePos), static_cast<uint64_t>(length));
 
         jbyteArray result = env->NewByteArray(static_cast<jsize>(buf.size()));

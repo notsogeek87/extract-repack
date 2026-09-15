@@ -43,7 +43,9 @@ private:
 class ArcReader {
 public:
     explicit ArcReader(const std::string& path);
+    explicit ArcReader(const std::vector<std::string>& paths);
     explicit ArcReader(int fd);
+    explicit ArcReader(const std::vector<int>& fds);
 
     // Full recursive listing of every file/directory across every
     // DIRECTORY_BLOCK referenced by the footer.

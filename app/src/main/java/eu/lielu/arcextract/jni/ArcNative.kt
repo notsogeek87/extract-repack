@@ -6,15 +6,22 @@ package eu.lielu.arcextract.jni
  * the app that calls `System.loadLibrary` — every other layer talks to
  * [ArcNative], never to JNI directly.
  *
- * Every method here takes a raw POSIX file descriptor ([Int]), not a path
- * or a `Uri`: SAF documents (especially anything other than plain local
- * storage) are not guaranteed to have a real filesystem path, but
+ * Every method here takes raw POSIX file descriptors ([IntArray]), not
+ * paths or `Uri`s: SAF documents (especially anything other than plain
+ * local storage) are not guaranteed to have a real filesystem path, but
  * `ContentResolver.openFileDescriptor(uri, "r")` always works for a
  * readable document and hands back a `ParcelFileDescriptor` whose `.fd`
  * this bridge can open directly (native/arc/file_source.cpp dup()s it, so
  * ownership/closing stays with the Kotlin caller). This class itself
  * never touches `ContentResolver` — see `eu.lielu.arcextract.saf` for
  * that layer.
+ *
+ * [fds] is always the *ordered* list of a single logical archive's parts:
+ * one fd for a plain single-file archive, or one fd per sibling `.bin`
+ * file (`fg-01.bin`, `fg-02.bin`, ...) for an Inno Setup style
+ * multi-part installer, where the real FreeArc container is the
+ * concatenation of all parts, not any one of them alone (see
+ * docs/ANALYSIS.md §1 and native/arc/file_source.h).
  */
 object ArcNative {
     init {
@@ -23,7 +30,7 @@ object ArcNative {
 
     /**
      * Lists every file/directory entry in the FreeArc "ArC" container
-     * behind [fd], following the FOOTER → DIRECTORY chain
+     * spanning [fds], following the FOOTER → DIRECTORY chain
      * (native/arc/arc_reader.cpp) without decompressing file contents.
      *
      * @throws UnsupportedCompressorException if a DIRECTORY or FOOTER
@@ -34,18 +41,18 @@ object ArcNative {
      *   reading the container structure.
      * @throws java.io.IOException for anything else (file not found, short read...).
      */
-    external fun listArc(fd: Int): Array<NativeArcEntry>
+    external fun listArc(fds: IntArray): Array<NativeArcEntry>
 
     /**
-     * Reads exactly [length] raw bytes from the file behind [fd] at
-     * [absolutePos], with no decompression of any kind — this is the
-     * "store" (uncompressed) extraction path exposed as a generic
+     * Reads exactly [length] raw bytes from the logical archive spanning
+     * [fds] at [absolutePos], with no decompression of any kind — this is
+     * the "store" (uncompressed) extraction path exposed as a generic
      * primitive so the Kotlin side (see `FreeArcBackend.extract`) can
      * chunk it into an arbitrary [java.io.OutputStream], including a
      * SAF-backed one from `ContentResolver.openOutputStream()`, without
      * ever holding a whole entry in memory at once.
      */
-    external fun readRawChunk(fd: Int, absolutePos: Long, length: Int): ByteArray
+    external fun readRawChunk(fds: IntArray, absolutePos: Long, length: Int): ByteArray
 
     /** Quick, cheap check of just the 4-byte "ArC" signature — no full parse. */
     external fun isArcSignature(headBytes: ByteArray): Boolean
