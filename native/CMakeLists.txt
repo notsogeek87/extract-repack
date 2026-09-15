@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(arcextract_native CXX)
+project(arcextract_native CXX C) # C for the vendored LzmaDec.c
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,8 +21,27 @@ add_library(arcextract_arc STATIC
     arc/crc32.cpp
     arc/file_source.cpp
     arc/arc_reader.cpp
+    arc/lzma_decoder.cpp
 )
 target_include_directories(arcextract_arc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# LZMA is the codec every real repack uses for its control blocks and its data,
+# so without it an archive can be parsed but nothing in it can be read. The
+# decoder is Igor Pavlov's public-domain LzmaDec.c, taken from the vendored
+# FreeArc submodule rather than copied in, so it stays the exact source the
+# archives were produced against. Guarded on the submodule being checked out
+# (git clone --recurse-submodules) so a build without it still compiles and
+# keeps reporting lzma as unsupported instead of failing to configure.
+set(FREEARC_LZMA_C ${CMAKE_CURRENT_SOURCE_DIR}/third_party/freearc/Compression/LZMA2/C)
+if(EXISTS ${FREEARC_LZMA_C}/LzmaDec.c)
+    target_sources(arcextract_arc PRIVATE ${FREEARC_LZMA_C}/LzmaDec.c)
+    target_include_directories(arcextract_arc PRIVATE ${FREEARC_LZMA_C})
+    target_compile_definitions(arcextract_arc PRIVATE ARCEXTRACT_WITH_LZMA)
+else()
+    message(WARNING
+        "native/third_party/freearc not checked out: building without LZMA support. "
+        "Run: git submodule update --init --recursive")
+endif()
 
 add_executable(arc_probe tools/arc_probe.cpp)
 target_link_libraries(arc_probe PRIVATE arcextract_arc)

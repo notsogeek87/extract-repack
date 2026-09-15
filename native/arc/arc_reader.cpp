@@ -6,6 +6,7 @@
 
 #include "byte_reader.h"
 #include "crc32.h"
+#include "lzma_decoder.h"
 
 namespace arcextract {
 
@@ -237,6 +238,13 @@ std::vector<uint8_t> ArcReader::decompressBlock(const BlockDescriptor& block) {
             throw ArcFormatError("archive structure corrupted (store size mismatch)");
         }
         decompressed = std::move(raw);
+    } else if (block.compressor.compare(0, 5, "lzma:") == 0 || block.compressor == "lzma") {
+        if (!isLzmaSupported()) {
+            throw UnsupportedCompressorError(block.compressor);
+        }
+        if (!lzmaDecode(block.compressor, raw, block.origSize, decompressed)) {
+            throw ArcFormatError("archive structure corrupted (LZMA block failed to decode)");
+        }
     } else {
         throw UnsupportedCompressorError(block.compressor);
     }

@@ -15,9 +15,22 @@ Re-run this script (`python3 generate_fixtures.py`) whenever the fixture
 layout needs to change; the generated .arc files are committed so the C++
 test suite does not need Python at build/test time.
 """
+import lzma
 import os
 import struct
 import zlib
+
+# FreeArc stores LZMA blocks as a bare LZMA1 stream with no properties header:
+# lzma_decompress2() gets lc/lp/pb and the dictionary size from the method
+# string instead (C_LZMA.cpp). FORMAT_RAW + FILTER_LZMA1 produces exactly that.
+LZMA_DICT_SIZE = 1 << 20  # "d1m"
+LZMA_METHOD = "lzma:mfbt4:d1m"
+
+
+def lzma_compress_freearc(data: bytes) -> bytes:
+    filters = [{"id": lzma.FILTER_LZMA1, "dict_size": LZMA_DICT_SIZE, "lc": 3, "lp": 0, "pb": 2}]
+    c = lzma.LZMACompressor(format=lzma.FORMAT_RAW, filters=filters)
+    return c.compress(data) + c.flush()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIGNATURE = bytes([0x41, 0x72, 0x43, 0x01])  # "ArC" + 0x01
@@ -115,7 +128,7 @@ def build_footer_local_descriptor(footer_origsize, footer_compsize, footer_crc, 
 
 
 def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_disk="store", corrupt_directory_byte=False,
-             corrupt_footer_descriptor_crc=False):
+             corrupt_footer_descriptor_crc=False, lzma_blocks=False):
     header_prefix = SIGNATURE  # cheap-detection bytes only; ArcReader::list() never reads these.
 
     data_block = b"".join(content for _, _, content in files)
@@ -127,22 +140,31 @@ def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_d
         dir_block_body[10] ^= 0xFF  # flips a byte inside the encoded metadata -> CRC mismatch on read.
         dir_block_body = bytes(dir_block_body)
     dir_block_pos = data_block_pos + len(data_block)
+    # A control block's recorded CRC is over its *decompressed* bytes
+    # (openCompressedCheckCRC in the vendored Unarc source), while its position
+    # and compsize describe what is actually on disk.
     dir_block_crc = crc32(dir_block_body)
+    dir_block_stored = lzma_compress_freearc(dir_block_body) if lzma_blocks else dir_block_body
+    if lzma_blocks:
+        dir_block_compressor_on_disk = LZMA_METHOD
 
-    footer_content_pos = dir_block_pos + len(dir_block_body)
+    footer_content_pos = dir_block_pos + len(dir_block_stored)
     footer_body = build_footer(
         dir_block_type=BLOCK_DIRECTORY,
         dir_block_compressor=dir_block_compressor_on_disk,
         dir_block_relative_pos=footer_content_pos - dir_block_pos,
         dir_block_origsize=len(dir_block_body),
-        dir_block_compsize=len(dir_block_body),
+        dir_block_compsize=len(dir_block_stored),
         dir_block_crc=dir_block_crc,
     )
     footer_crc = crc32(footer_body)
+    footer_stored = lzma_compress_freearc(footer_body) if lzma_blocks else footer_body
+    if lzma_blocks:
+        footer_compressor_on_disk = LZMA_METHOD
 
     descriptor = build_footer_local_descriptor(
         footer_origsize=len(footer_body),
-        footer_compsize=len(footer_body),
+        footer_compsize=len(footer_stored),
         footer_crc=footer_crc,
         compressor=footer_compressor_on_disk,
     )
@@ -151,7 +173,7 @@ def assemble(files, dir_block_compressor_on_disk="store", footer_compressor_on_d
         # real repacker-built .bin files.
         descriptor = descriptor[:-4] + fixed4(0xDEADBEEF)
 
-    return header_prefix + data_block + dir_block_body + footer_body + descriptor
+    return header_prefix + data_block + dir_block_stored + footer_stored + descriptor
 
 
 def main():
@@ -195,6 +217,12 @@ def main():
     # fields rather than reported as corrupt.
     with open(os.path.join(HERE, "sample_bad_descriptor_crc.arc"), "wb") as f:
         f.write(assemble(files, corrupt_footer_descriptor_crc=True))
+
+    # Control blocks compressed with LZMA, which is what every real repack
+    # uses ("lzma:mfbt4:d1m" on the archive this was built against). Listing
+    # such an archive is impossible without a working LZMA decoder.
+    with open(os.path.join(HERE, "sample_lzma.arc"), "wb") as f:
+        f.write(assemble(files, lzma_blocks=True))
 
     # Only a coincidental "ArC\x01" near EOF and nothing that CRC-validates:
     # must be rejected, with diagnostics, rather than misparsed.

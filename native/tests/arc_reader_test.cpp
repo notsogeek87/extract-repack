@@ -7,6 +7,7 @@
 #include <string>
 
 #include "../arc/arc_reader.h"
+#include "../arc/lzma_decoder.h"
 #include "../arc/vle.h"
 
 using namespace arcextract;
@@ -143,6 +144,38 @@ void testReadsDescriptorWhoseCrcDoesNotValidate() {
     expectTrue(entries.size() == 2, "an archive whose descriptor CRC does not validate still lists its files");
 }
 
+void testListsArchiveWithLzmaControlBlocks() {
+    // Every real repack compresses its control blocks with LZMA
+    // ("lzma:mfbt4:d1m" on the archive this was built against), so listing one
+    // is impossible without a working decoder. FreeArc stores no properties
+    // header, so this also pins that lc/lp/pb and the dictionary size are
+    // recovered from the method string.
+    ArcReader reader(fixturePath("sample_lzma.arc"));
+    std::vector<ArcEntry> entries = reader.list();
+    expectTrue(entries.size() == 2, "an archive whose control blocks are LZMA-compressed lists its 2 files");
+
+    bool foundHello = false;
+    for (const auto& e : entries) {
+        if (e.path == "data/hello.txt") {
+            foundHello = true;
+            expectTrue(e.uncompressedSize == 47, "the LZMA-decoded directory reports the right size");
+        }
+    }
+    expectTrue(foundHello, "entry names survive the LZMA-decoded directory block");
+}
+
+void testParsesLzmaMethodString() {
+    LzmaParams params = parseLzmaMethod("lzma:mfbt4:d1m");
+    expectTrue(params.dictSize == 1u << 20, "d1m is read as a 1 MB dictionary");
+    expectTrue(params.litContextBits == 3 && params.litPosBits == 0 && params.posStateBits == 2,
+               "lc/lp/pb fall back to LZMA_METHOD's defaults");
+
+    LzmaParams explicitParams = parseLzmaMethod("lzma:d64m:lc1:lp2:pb1");
+    expectTrue(explicitParams.dictSize == 64u << 20 && explicitParams.litContextBits == 1 &&
+                   explicitParams.litPosBits == 2 && explicitParams.posStateBits == 1,
+               "explicit lc/lp/pb/dictionary parameters override the defaults");
+}
+
 void testReportsDiagnosticsOnFooterFailure() {
     // A footer failure can only happen against files that cannot be
     // reproduced off-device, so the message must carry enough to diagnose it
@@ -254,6 +287,8 @@ int main() {
     testCorruptionIsDetected();
     testReadsDescriptorFollowedByTrailingBytes();
     testReadsDescriptorWhoseCrcDoesNotValidate();
+    testParsesLzmaMethodString();
+    testListsArchiveWithLzmaControlBlocks();
     testReportsDiagnosticsOnFooterFailure();
     testListsAndExtractsAcrossMultiPartBoundary();
     testListsSideBySideIndependentArchives();
